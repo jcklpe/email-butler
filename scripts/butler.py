@@ -184,6 +184,7 @@ def load_json(path):
 def atomic_json(path, value):
     path = no_symlinks(path)
     encoded = json.dumps(value, indent=2, ensure_ascii=False) + "\n"
+    require(len(encoded.encode("utf-8")) <= 1_000_000, "State file exceeds the 1 MB read/write limit")
     fd, temporary = tempfile.mkstemp(prefix=".butler-", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
@@ -222,6 +223,10 @@ def locked(root):
 
 def profile_at(root):
     return validate_profile(load_json(root / "profile.json"))
+
+
+def default_state_directory():
+    return Path.home() / ".email-butler"
 
 
 def initialize(root):
@@ -310,12 +315,32 @@ def apply(root, proposal_id, approval):
         return {"status": "applied", "profile": saved, "mailbox_changed": False}
 
 
+def change_history(root, limit=20):
+    root = private_directory(root)
+    integer(limit, 1, 100, "history limit")
+    with locked(root):
+        current = profile_at(root)
+        entries = []
+        def revision(number):
+            return current if number == current["revision"] else validate_profile(load_json(root / "revisions" / f"{number}.json"))
+        for number in range(max(1, current["revision"] - limit + 1), current["revision"] + 1):
+            after = revision(number)
+            require(after["revision"] == number, "Revision history has an inconsistent revision")
+            proposal = read_proposal(root, after["last_change_id"])
+            candidate = copy.deepcopy(proposal["candidate"])
+            candidate["last_change_id"] = proposal["id"]
+            before = revision(number - 1)
+            require(candidate == after and digest(before) == proposal["base_digest"], "Change history does not match saved revisions")
+            entries.append({"revision": number, "id": proposal["id"], "type": proposal["request"]["type"], "reason": proposal["request"]["reason"], "before": before, "after": after})
+        return {"revision": current["revision"], "changes": entries, "older_changes": max(0, current["revision"] - len(entries)), "mailbox_changed": False}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("init", "show", "propose", "apply", "inspect"):
+    for name in ("init", "show", "propose", "apply", "inspect", "history", "location"):
         command = sub.add_parser(name)
-        command.add_argument("--state-dir", type=Path, required=True)
+        command.add_argument("--state-dir", type=Path, default=default_state_directory())
         if name == "propose":
             command.add_argument("--request", type=Path, required=True)
             command.add_argument("--user-request", required=True)
@@ -323,9 +348,13 @@ def main(argv=None):
             command.add_argument("--id", required=True)
         if name == "apply":
             command.add_argument("--approval", required=True)
+        if name == "history":
+            command.add_argument("--limit", type=int, default=20)
     args = parser.parse_args(argv)
     try:
-        if args.command == "init":
+        if args.command == "location":
+            result = {"state_dir": str(no_symlinks(args.state_dir)), "exists": args.state_dir.is_dir(), "mailbox_changed": False}
+        elif args.command == "init":
             result = initialize(args.state_dir)
         elif args.command == "propose":
             result = propose(args.state_dir, load_json(args.request), args.user_request)
@@ -333,6 +362,8 @@ def main(argv=None):
             result = apply(args.state_dir, args.id, args.approval)
         elif args.command == "inspect":
             result = read_proposal(private_directory(args.state_dir), args.id)
+        elif args.command == "history":
+            result = change_history(args.state_dir, args.limit)
         else:
             result = profile_at(private_directory(args.state_dir))
         print(json.dumps(result, indent=2, ensure_ascii=False))

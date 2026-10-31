@@ -15,6 +15,8 @@ Public documentation checked on 2026-10-31 is incomplete: the directory lists se
 Setup should attempt the supported connector route and report the recipient's actual result. Continue useful supported work when an action is unavailable, and surface only the limitation that matters to the requested operation. A safe native-rule lifecycle needs inspection, exact-ID removal, and readback as well as creation.
 
 ## Other relevant capabilities
+Check unsubscribe separately from archive, spam reporting, and rule creation. A supported unsubscribe operation, a sender-provided link, and a verified subscription change are different things. Missing header/body access can also prevent finding a legitimate unsubscribe link. The workflow must report the actual available route and cannot infer success from a message disappearing from Inbox.
+
 Claude's Gmail directory documents create_filter and list_filters, label creation/application/removal, and spam rescue. Its public list does not establish filter deletion. Gmail archive is removal of the INBOX system label, supported by the documented unlabel_thread schema. Some advanced Gmail filters are unsupported and attachment bodies are unavailable through Claude's Gmail connector.
 
 The offline classifier in scripts/capabilities.py recognizes a bounded set of known tool names. It is a starting point for schema inspection, not a complete connector catalog. Unknown names and missing mappings require checking the recipient's actual tools. They do not establish permanent feature absence, permissions, successful execution, or setup readiness.

@@ -8,8 +8,13 @@ attention: live
 ## Ready for Human QA
 - Recipient's actual Claude/Codex: run the README setup prompt, install/connect requested services, and inspect Outlook archive/move plus the complete rule lifecycle.
 - Recipient-machine installation/discovery, sign-in experience, durable state across a new chat, and real connector permission checks.
+- Real review layout, pause/resume, pattern suggestions, unsubscribe route, and a bounded historical cleanup group in the recipient environment; no live mail or subscription test has been performed during development.
 
 ## Done
+- Review/memory follow-up passed 47 standard-library tests and skill validation. Fresh-process checks cover history, observation tallies, small review queues, deferrals, and state-location discovery. An independent synthetic forward test found one-off sizing, deferred-target visibility, and state-location gaps; focused regressions and an independent fresh-process follow-up confirm the implemented repairs. The follow-up preserved saved settings, retrieved deferred/uncertain targets, and located state without creating it before initialization. Live recipient behavior remains untested.
+- Added the supplied logo and Agent Hands start marker; simplified the README's settings-change explanation.
+- Defined the chat review layout, five-message combined slates, resumable private checkpoints, separate recent/backlog tracks, narrow native-rule promotion, and supported unsubscribe suggestions/actions.
+- Added an applied-settings history view and a typed private observation journal with distinct-message tallies, honest operation statuses, and Outlook returned-identity deduplication. Observations do not mutate settings or authorize mailbox actions.
 - Built the bundled private profile/change engine and tool-inventory classifier. Configuration plans do not execute mailbox actions; Workflow Revision and Access Change remain proposal-only.
 - Adopted Git-only distribution and recipient-agent setup. Removed the initial ZIP builder/distribution path and added conflict-preserving local registration for Codex and Claude Code.
 - Added connector-first onboarding, native organization guidance, explicit change/activation gates, and capability evidence in one self-contained skill.

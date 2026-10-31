@@ -51,3 +51,10 @@ Workflow Revision payload: request and a nonempty examples list of input/expecte
 
 ## Limits
 These local checks protect the typed writer, not the entire host. The helper cannot authenticate that a CLI argument came from a human, prevent an agent with filesystem access from bypassing it, enforce connector permissions, or validate arbitrary workflow code. The host/agent must enforce source provenance and approvals. The phrase is a product interaction gate, not a security credential. Workflows and access grants cannot be broadened by recursive self-editing.
+
+## Change history and commits
+`python3 scripts/butler.py history --state-dir STATE` reconstructs applied changes from saved revisions and their exact proposals. It returns the change ID, type, reason, and before/after settings in revision order. Pending or proposal-only requests are not reported as applied. The default returns the latest 20 changes; --limit accepts up to 100 and reports whether older changes remain. Saved versions have revision order; do not invent application timestamps.
+
+Turn that data into a short plain-language answer to “What changed?” or “Why does it do that?” Keep the full private records for inspection. Configuration Restore gets its own new revision and preserves the intervening history. It restores settings/plans, not observations, subscriptions, native rules, or message moves already performed.
+
+Personal settings and observations do not need Git commits and never belong in the public source repository. A Workflow Revision changes code/instructions: show its diff, run relevant tests, and use the repository's local checkpoint policy after explicit implementation approval. Keep those technical changes separate from the recipient's private settings. Nothing auto-publishes personal customizations upstream.

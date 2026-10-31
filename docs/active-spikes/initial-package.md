@@ -21,5 +21,10 @@ The maintained source is [references/capabilities.md](../../references/capabilit
 ## State and verification
 Keep user state outside source/distribution. Native rules remain canonical in the mailbox; a local rule plan does not prove installation. A script can validate structure and limits, but cannot authenticate the human origin of a CLI argument, judge whether a rule is wise, enforce the host's tools, or prevent an agent from bypassing files it can edit. Those limits must be explicit.
 
+## Review, memory, and volume reduction
+The chat review uses stable numbered blocks, defaults to five messages in total, and saves a private resumable queue. A queue records completion/deferral without carrying approvals into a new chat. Settings history is reconstructed from immutable proposals and saved profile revisions. A separate typed journal holds confirmed action receipts and clear feedback; it counts distinct messages and never edits policy. Local state survives fresh sessions using the same directory; shared cloud/local persistence still requires an adapter.
+
+The organization workflow moves from reviewed patterns to one keep-receiving, unsubscribe, or narrow-native-rule discussion at a time. Archive counts alone do not establish unwanted mail. Large inboxes use recent-mail coverage plus bounded historical groups, native search/aggregation, and separately approved deterministic backfills. Inbox zero is a direction, not permission for an installation-time sweep or a claim that archived historical mail was read. The README includes the supplied logo and the shared Agent Hands start marker.
+
 ## Remaining acceptance work
 Run the README prompt in the recipient's actual agent and capture exact schemas for archive/move, rule list/get/create/delete, and enabled account permissions. Test a known synthetic message and a uniquely named nonmatching rule only after their exact operations are approved. Verify durable state across a fresh chat and validate clean installation on that computer. Avoid claiming those checks from offline fixtures or another person's setup.

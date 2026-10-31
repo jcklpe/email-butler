@@ -8,6 +8,8 @@ The user interacts with an agent, not a terminal or source editor. Reuse correct
 
 Preserve the exact durable-change entry phrase, typed change classes, preview/activation separation, and honest persistence reporting in SKILL.md. A mailbox mutation is a separate operation from a local configuration change. Product permission boundaries cannot be changed through preference data.
 
+Keep observations separate from approved settings. Persist only typed private evidence and checkpoints, never silently learn rules from counts or frustration. Use the defined small-slate presentation and separate recent mail from historical cleanup. Repeated patterns can prompt a narrow native rule or subscription discussion; they do not authorize either action. Saved queue progress never carries mailbox approval into a new session.
+
 ## Development
 Read README.md, SKILL.md, and the active spike linked from TODO.md. Use installed global Project Workflows procedures when available; they are development aids, not package dependencies. Active spike records live in docs/active-spikes/. Make local coherent checkpoints; never push or add co-author trailers. Keep private profiles, credentials, email exports, and test-account evidence out of Git. Use synthetic fixtures.
 
