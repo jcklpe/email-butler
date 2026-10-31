@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+.email-butler-state/
+*.local.json
+.env
+.env.*
+!.env.example
+.reference-paths.local.json
+.github/project-collaboration/

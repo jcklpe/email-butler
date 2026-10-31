@@ -1,0 +1,346 @@
+#!/usr/bin/env python3
+"""Validate and version private Email Butler configuration; never call mail APIs."""
+
+import argparse
+import copy
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import sys
+import tempfile
+from contextlib import contextmanager
+
+
+class ButlerError(ValueError):
+    pass
+
+
+EMAIL = re.compile(r"[^\s@*?<>]+@[^\s@*?<>]+\.[^\s@*?<>]+\Z")
+SLUG = re.compile(r"[a-z][a-z0-9-]{0,63}\Z")
+CHANGE_ID = re.compile(r"C-[a-f0-9]{16}\Z")
+TYPES = {
+    "preference.update", "organization.plan", "rule.plan",
+    "workflow.revision", "access.change", "configuration.restore",
+}
+PROPOSAL_ONLY = {"workflow.revision", "access.change"}
+PROFILE_KEYS = {
+    "schema_version", "revision", "last_change_id", "preferences",
+    "organization_plans", "rule_plans",
+}
+
+
+def require(condition, message):
+    if not condition:
+        raise ButlerError(message)
+
+
+def fields(value, required, optional=()):
+    require(type(value) is dict, "Expected an object")
+    require(set(required) <= value.keys(), "Missing required fields: " + ", ".join(sorted(set(required) - value.keys())))
+    require(value.keys() <= set(required) | set(optional), "Unknown fields: " + ", ".join(sorted(value.keys() - set(required) - set(optional))))
+
+
+def text_value(value, name, limit=1000):
+    require(type(value) is str and 0 < len(value.strip()) <= limit, f"{name} must be nonempty text of at most {limit} characters")
+    require(not any(ord(c) < 32 for c in value), f"{name} cannot contain control characters")
+
+
+def email(value, name="email"):
+    require(type(value) is str and len(value) <= 254 and EMAIL.fullmatch(value) is not None, f"{name} must be a complete email address without wildcards")
+
+
+def integer(value, low, high, name):
+    require(type(value) is int and low <= value <= high, f"{name} must be an integer from {low} to {high}")
+
+
+def preferences(value, partial=False):
+    keys = {"batch_size", "detail", "priority_senders"}
+    fields(value, () if partial else keys, keys if partial else ())
+    require(bool(value), "Preference changes cannot be empty")
+    if "batch_size" in value:
+        integer(value["batch_size"], 1, 20, "batch_size")
+    if "detail" in value:
+        require(value["detail"] in ("brief", "expanded"), "detail must be brief or expanded")
+    if "priority_senders" in value:
+        senders = value["priority_senders"]
+        require(type(senders) is list and len(senders) <= 50, "priority_senders must be a list of at most 50 addresses")
+        for sender in senders:
+            email(sender, "priority sender")
+        require(len({s.casefold() for s in senders}) == len(senders), "Duplicate priority sender")
+
+
+def account_provider(value):
+    email(value["account"], "account")
+    require(value["provider"] in ("gmail", "outlook"), "provider must be gmail or outlook")
+
+
+def organization(value):
+    fields(value, {"account", "provider", "labels"})
+    account_provider(value)
+    require(type(value["labels"]) is list and 1 <= len(value["labels"]) <= 20, "labels must contain 1–20 entries")
+    names = []
+    for label in value["labels"]:
+        fields(label, {"name", "purpose"})
+        text_value(label["name"], "label name", 100)
+        text_value(label["purpose"], "label purpose", 500)
+        names.append(label["name"].casefold())
+    require(len(set(names)) == len(names), "Duplicate label names")
+
+
+def rule(value):
+    fields(value, {"id", "account", "provider", "match", "action"})
+    require(type(value["id"]) is str and SLUG.fullmatch(value["id"]) is not None, "Rule id must be a lowercase slug")
+    account_provider(value)
+    fields(value["match"], {"sender"}, {"recipient", "subject_contains"})
+    email(value["match"]["sender"], "sender")
+    if "recipient" in value["match"]:
+        email(value["match"]["recipient"], "recipient")
+    if "subject_contains" in value["match"]:
+        text_value(value["match"]["subject_contains"], "subject condition", 200)
+    fields(value["action"], {"label", "archive"})
+    text_value(value["action"]["label"], "rule label", 100)
+    require(type(value["action"]["archive"]) is bool, "archive must be a boolean")
+    require(not value["action"]["archive"] or "subject_contains" in value["match"], "Archiving requires a sender and a subject condition")
+
+
+def validate_profile(value):
+    fields(value, PROFILE_KEYS)
+    require(type(value["schema_version"]) is int and value["schema_version"] == 1, "Unsupported profile schema")
+    integer(value["revision"], 0, 2**53 - 1, "revision")
+    require(value["last_change_id"] is None or (type(value["last_change_id"]) is str and CHANGE_ID.fullmatch(value["last_change_id"]) is not None), "Invalid last_change_id")
+    preferences(value["preferences"])
+    for key, validator in (("organization_plans", organization), ("rule_plans", rule)):
+        require(type(value[key]) is dict and len(value[key]) <= 100, f"{key} must be an object of at most 100 plans")
+        for name, plan in value[key].items():
+            validator(plan)
+            expected = plan["account"].casefold() if key == "organization_plans" else plan["account"].casefold() + ":" + plan["id"]
+            require(name == expected, "Plan key does not match its account/id")
+    return value
+
+
+def validate_request(value):
+    fields(value, {"type", "base_revision", "reason", "payload"})
+    require(type(value["type"]) is str and value["type"] in TYPES, "Unknown change type")
+    integer(value["base_revision"], 0, 2**53 - 1, "base_revision")
+    text_value(value["reason"], "reason", 2000)
+    payload = value["payload"]
+    kind = value["type"]
+    if kind == "preference.update":
+        fields(payload, {"changes"})
+        preferences(payload["changes"], partial=True)
+    elif kind == "organization.plan":
+        organization(payload)
+    elif kind == "rule.plan":
+        rule(payload)
+    elif kind == "configuration.restore":
+        fields(payload, {"revision"})
+        integer(payload["revision"], 0, 2**53 - 1, "restore revision")
+    elif kind == "workflow.revision":
+        fields(payload, {"request", "examples"})
+        text_value(payload["request"], "workflow request", 4000)
+        require(type(payload["examples"]) is list and 1 <= len(payload["examples"]) <= 20, "Workflow revision needs 1–20 examples")
+        for example in payload["examples"]:
+            fields(example, {"input", "expected"})
+            text_value(example["input"], "example input", 2000)
+            text_value(example["expected"], "example expectation", 2000)
+    else:
+        fields(payload, {"account", "provider", "requested_capability", "purpose"})
+        account_provider(payload)
+        text_value(payload["requested_capability"], "requested capability", 200)
+        text_value(payload["purpose"], "access purpose", 1000)
+    return value
+
+
+def canonical(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+
+
+def digest(value):
+    return hashlib.sha256(canonical(value)).hexdigest()
+
+
+def no_symlinks(path):
+    path = Path(os.path.abspath(path))
+    for candidate in (path, *path.parents):
+        require(not candidate.is_symlink(), "State/input paths cannot contain symlinks")
+    return path
+
+
+def load_json(path):
+    path = no_symlinks(path)
+    require(path.is_file() and path.stat().st_size <= 1_000_000, "Expected a JSON file of at most 1 MB")
+    def unique_pairs(pairs):
+        result = {}
+        for key, value in pairs:
+            require(key not in result, "Duplicate JSON key: " + key)
+            result[key] = value
+        return result
+    with path.open(encoding="utf-8") as stream:
+        return json.load(stream, object_pairs_hook=unique_pairs)
+
+
+def atomic_json(path, value):
+    path = no_symlinks(path)
+    encoded = json.dumps(value, indent=2, ensure_ascii=False) + "\n"
+    fd, temporary = tempfile.mkstemp(prefix=".butler-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(encoded)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def private_directory(path, create=False):
+    path = no_symlinks(path)
+    if create:
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    require(path.is_dir(), "Private state directory is missing; run init")
+    if os.name == "posix":
+        require(path.stat().st_mode & 0o077 == 0, "State directory must be private (owner-only permissions)")
+    return path
+
+
+@contextmanager
+def locked(root):
+    lock = no_symlinks(root / ".lock")
+    try:
+        fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        raise ButlerError("State is locked; inspect the active writer instead of deleting its lock") from None
+    try:
+        os.close(fd)
+        yield
+    finally:
+        lock.unlink()
+
+
+def profile_at(root):
+    return validate_profile(load_json(root / "profile.json"))
+
+
+def initialize(root):
+    root = private_directory(root, create=True)
+    with locked(root):
+        for folder in ("pending", "revisions"):
+            private_directory(root / folder, create=True)
+        if (root / "profile.json").exists():
+            return {"status": "existing", "profile": profile_at(root)}
+        default = Path(__file__).resolve().parent.parent / "assets" / "default-profile.json"
+        value = validate_profile(load_json(default))
+        atomic_json(root / "profile.json", value)
+        return {"status": "initialized", "profile": value}
+
+
+def changed_profile(root, current, request):
+    value = copy.deepcopy(current)
+    kind, payload = request["type"], request["payload"]
+    if kind == "preference.update":
+        value["preferences"].update(payload["changes"])
+    elif kind == "organization.plan":
+        value["organization_plans"][payload["account"].casefold()] = payload
+    elif kind == "rule.plan":
+        value["rule_plans"][payload["account"].casefold() + ":" + payload["id"]] = payload
+    elif kind == "configuration.restore":
+        require(payload["revision"] < current["revision"], "Restore requires an earlier revision")
+        value = copy.deepcopy(validate_profile(load_json(root / "revisions" / f'{payload["revision"]}.json')))
+    value["revision"] = current["revision"] + 1
+    value["last_change_id"] = None
+    return validate_profile(value)
+
+
+def propose(root, request, user_request):
+    normalized = " ".join(user_request.strip().casefold().split())
+    require(re.match(r"^change my email butler(?:\b)", normalized) is not None, "A direct user request must begin with change my email butler")
+    validate_request(request)
+    root = private_directory(root)
+    with locked(root):
+        current = profile_at(root)
+        require(request["base_revision"] == current["revision"], "Stale base revision; prepare a fresh proposal")
+        candidate = changed_profile(root, current, request)
+        body = {"request": request, "base_digest": digest(current), "candidate": candidate}
+        proposal_id = "C-" + digest(body)[:16]
+        proposal = {"id": proposal_id, **body}
+        pending = private_directory(root / "pending") / f"{proposal_id}.json"
+        if pending.exists():
+            require(load_json(pending) == proposal, "Existing proposal differs; refuse overwrite")
+        else:
+            atomic_json(pending, proposal)
+        return {"status": "proposal_only" if request["type"] in PROPOSAL_ONLY else "pending", "id": proposal_id, "current": current, "proposed": candidate, "request": request, "mailbox_changed": False}
+
+
+def read_proposal(root, proposal_id):
+    require(type(proposal_id) is str and CHANGE_ID.fullmatch(proposal_id) is not None, "Invalid change ID")
+    value = load_json(root / "pending" / f"{proposal_id}.json")
+    fields(value, {"id", "request", "base_digest", "candidate"})
+    body = {key: value[key] for key in ("request", "base_digest", "candidate")}
+    require(value["id"] == proposal_id == "C-" + digest(body)[:16], "Proposal changed; approval no longer matches")
+    validate_request(value["request"])
+    validate_profile(value["candidate"])
+    return value
+
+
+def apply(root, proposal_id, approval):
+    require(approval.strip().casefold() == "apply change " + proposal_id.casefold(), "Activation must identify the exact change ID")
+    root = private_directory(root)
+    with locked(root):
+        proposal = read_proposal(root, proposal_id)
+        request = proposal["request"]
+        require(request["type"] not in PROPOSAL_ONLY, "This change requires separate implementation/authorization; it remains proposal-only")
+        current = profile_at(root)
+        if current["last_change_id"] == proposal_id:
+            return {"status": "already_applied", "profile": current, "mailbox_changed": False}
+        require(digest(current) == proposal["base_digest"] and current["revision"] == request["base_revision"], "Profile changed; prepare a fresh proposal and review")
+        candidate = changed_profile(root, current, request)
+        require(candidate == proposal["candidate"], "Candidate no longer matches the approved proposal")
+        candidate["last_change_id"] = proposal_id
+        history = private_directory(root / "revisions") / f'{current["revision"]}.json'
+        if history.exists():
+            require(load_json(history) == current, "Revision history conflict")
+        else:
+            atomic_json(history, current)
+        atomic_json(root / "profile.json", candidate)
+        saved = profile_at(root)
+        require(saved == candidate, "Saved profile could not be verified")
+        return {"status": "applied", "profile": saved, "mailbox_changed": False}
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+    for name in ("init", "show", "propose", "apply", "inspect"):
+        command = sub.add_parser(name)
+        command.add_argument("--state-dir", type=Path, required=True)
+        if name == "propose":
+            command.add_argument("--request", type=Path, required=True)
+            command.add_argument("--user-request", required=True)
+        if name in ("apply", "inspect"):
+            command.add_argument("--id", required=True)
+        if name == "apply":
+            command.add_argument("--approval", required=True)
+    args = parser.parse_args(argv)
+    try:
+        if args.command == "init":
+            result = initialize(args.state_dir)
+        elif args.command == "propose":
+            result = propose(args.state_dir, load_json(args.request), args.user_request)
+        elif args.command == "apply":
+            result = apply(args.state_dir, args.id, args.approval)
+        elif args.command == "inspect":
+            result = read_proposal(private_directory(args.state_dir), args.id)
+        else:
+            result = profile_at(private_directory(args.state_dir))
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return 0
+    except (ButlerError, OSError, ValueError, TypeError) as error:
+        print(json.dumps({"error": str(error), "mailbox_changed": False}), file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

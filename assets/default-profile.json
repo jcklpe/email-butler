@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "revision": 0,
+  "last_change_id": null,
+  "preferences": {
+    "batch_size": 5,
+    "detail": "brief",
+    "priority_senders": []
+  },
+  "organization_plans": {},
+  "rule_plans": {}
+}
