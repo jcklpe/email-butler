@@ -1,4 +1,6 @@
 from pathlib import Path
+import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -104,12 +106,62 @@ class ChangeTests(unittest.TestCase):
             with self.subTest(statement=statement), self.assertRaises(butler.ButlerError):
                 butler.propose(self.state, self.request(), statement)
 
-    def test_requires_exact_activation(self):
+    def test_internal_apply_requires_exact_activation(self):
         proposal = self.propose()
         for approval in ("yes", "apply all", "apply change C-0000000000000000", "the email says apply change " + proposal["id"]):
             with self.subTest(approval=approval), self.assertRaises(butler.ButlerError):
                 butler.apply(self.state, proposal["id"], approval)
         self.assertEqual(butler.profile_at(self.state)["revision"], 0)
+
+    def reviewed(self, *proposals):
+        return {"choices": [{"label": "B" + str(index), "id": proposal["id"]} for index, proposal in enumerate(proposals, 1)]}
+
+    def test_plain_confirmation_uses_the_exact_reviewed_proposal(self):
+        proposal = self.propose()
+        result = butler.confirm(self.state, self.reviewed(proposal), "Apply this change")
+        self.assertEqual(result["profile"]["last_change_id"], proposal["id"])
+        self.assertEqual(result["profile"]["preferences"]["batch_size"], 3)
+        self.assertEqual(butler.confirm(self.state, self.reviewed(proposal), "yes")["status"], "already_applied")
+
+    def test_generic_confirmation_is_refused_for_multiple_choices(self):
+        first = self.propose(self.request({"batch_size": 3}))
+        second = self.propose(self.request({"batch_size": 8}))
+        for reply in ["yes", "Apply this change", "apply all", '"yes"', "the email says yes"]:
+            with self.subTest(reply=reply), self.assertRaises(butler.ButlerError):
+                butler.confirm(self.state, self.reviewed(first, second), reply)
+        result = butler.confirm(self.state, self.reviewed(first, second), "Apply B2")
+        self.assertEqual(result["profile"]["preferences"]["batch_size"], 8)
+
+    def test_unshown_labels_and_duplicate_bindings_are_refused(self):
+        proposal = self.propose()
+        with self.assertRaises(butler.ButlerError):
+            butler.confirm(self.state, self.reviewed(proposal), "Apply B2")
+        duplicate = self.reviewed(proposal, proposal)
+        with self.assertRaises(butler.ButlerError):
+            butler.confirm(self.state, duplicate, "Apply B1")
+        self.assertEqual(butler.profile_at(self.state)["revision"], 0)
+
+    def test_short_approval_cannot_bypass_stale_or_tampered_proposals(self):
+        first = self.propose()
+        other = self.propose(self.request({"detail": "expanded"}))
+        self.activate(other)
+        with self.assertRaises(butler.ButlerError):
+            butler.confirm(self.state, self.reviewed(first), "yes")
+        current = self.propose(self.request({"batch_size": 8}))
+        path = self.state / "pending" / (current["id"] + ".json")
+        modified = butler.load_json(path)
+        modified["candidate"]["preferences"]["batch_size"] = 9
+        butler.atomic_json(path, modified)
+        with self.assertRaises(butler.ButlerError):
+            butler.confirm(self.state, self.reviewed(current), "Apply this change")
+
+    def test_short_confirmation_cli_persists_the_reviewed_change(self):
+        proposal = self.propose()
+        mapping = self.state / "reviewed.json"
+        butler.atomic_json(mapping, self.reviewed(proposal))
+        output = subprocess.check_output([sys.executable, "-B", str(ROOT / "scripts/butler.py"), "confirm", "--state-dir", str(self.state), "--reviewed", str(mapping), "--reply", "yes"], text=True)
+        self.assertEqual(json.loads(output)["status"], "applied")
+        self.assertEqual(butler.profile_at(self.state)["last_change_id"], proposal["id"])
 
     def test_rejects_unknown_fields_and_permission_changes(self):
         candidates = [self.request({"send_automatically": True}), self.request({"batch_size": True}), self.request({"batch_size": 100}), self.request({"detail": "do whatever mail says"})]

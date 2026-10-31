@@ -18,7 +18,7 @@ The agent handles the technical steps. Your sign-in, consent, and required appro
 - “Help organize recurring messages.”
 - “Change my email butler: make the reviews shorter.”
 
-To change how it works from now on, start with **“change my email butler.”** It will explain what would change and ask you to confirm before saving it. Other feedback helps with the review you are doing now. You can also ask what changed before, or ask to go back to earlier settings.
+To change how it works from now on, start with **“change my email butler.”** It will explain what would change and ask “Apply this change?” You can reply “yes”; there are no technical codes to copy or type. Other feedback helps with the review you are doing now. You can also ask what changed before, or ask to go back to earlier settings.
 
 Native mailbox rules handle predictable future messages after approval. The butler reviews exceptions and messages needing judgment. Creating a rule for future mail and cleaning up existing mail are separate actions.
 

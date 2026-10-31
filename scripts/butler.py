@@ -329,6 +329,30 @@ def apply(root, proposal_id, approval):
         return {"status": "applied", "profile": saved, "mailbox_changed": False}
 
 
+def confirm(root, reviewed, reply):
+    fields(reviewed, {"choices"})
+    choices = reviewed["choices"]
+    require(type(choices) is list and 1 <= len(choices) <= 20, "Expected the exact choices shown in the current change preview")
+    labels, ids = {}, set()
+    for choice in choices:
+        fields(choice, {"label", "id"})
+        require(type(choice["label"]) is str and re.fullmatch(r"B[1-9][0-9]{0,2}", choice["label"]), "Change labels must be short B labels, such as B1")
+        require(type(choice["id"]) is str and CHANGE_ID.fullmatch(choice["id"]), "Invalid internal change identity")
+        require(choice["label"] not in labels and choice["id"] not in ids, "Duplicate change label or identity")
+        labels[choice["label"]] = choice["id"]
+        ids.add(choice["id"])
+    require(type(reply) is str, "Expected the direct user's confirmation")
+    normalized = " ".join(reply.strip().casefold().split())
+    if normalized in {"apply this change", "apply it", "yes", "yes, apply it", "go ahead"}:
+        require(len(labels) == 1, "Several changes were shown; ask which short label the user wants to apply")
+        selected = next(iter(labels.values()))
+    else:
+        match = re.fullmatch(r"(?:apply|approve) (b[1-9][0-9]{0,2})", normalized)
+        require(match is not None and match[1].upper() in labels, "Confirm the current change or select one of its displayed short labels")
+        selected = labels[match[1].upper()]
+    return apply(root, selected, "apply change " + selected)
+
+
 def change_history(root, limit=20):
     root = private_directory(root)
     integer(limit, 1, 100, "history limit")
@@ -352,7 +376,7 @@ def change_history(root, limit=20):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("init", "show", "propose", "apply", "inspect", "history", "location"):
+    for name in ("init", "show", "propose", "apply", "confirm", "inspect", "history", "location"):
         command = sub.add_parser(name)
         command.add_argument("--state-dir", type=Path, default=default_state_directory())
         if name == "propose":
@@ -362,6 +386,9 @@ def main(argv=None):
             command.add_argument("--id", required=True)
         if name == "apply":
             command.add_argument("--approval", required=True)
+        if name == "confirm":
+            command.add_argument("--reviewed", type=Path, required=True)
+            command.add_argument("--reply", required=True)
         if name == "history":
             command.add_argument("--limit", type=int, default=20)
     args = parser.parse_args(argv)
@@ -374,6 +401,8 @@ def main(argv=None):
             result = propose(args.state_dir, load_json(args.request), args.user_request)
         elif args.command == "apply":
             result = apply(args.state_dir, args.id, args.approval)
+        elif args.command == "confirm":
+            result = confirm(args.state_dir, load_json(args.reviewed), args.reply)
         elif args.command == "inspect":
             result = read_proposal(private_directory(args.state_dir), args.id)
         elif args.command == "history":
