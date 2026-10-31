@@ -1,5 +1,5 @@
 # Recipient capability checks
-At setup, inspect the recipient's own agent, installed connectors, selected accounts, permissions, and tool schemas. That environment determines what Email Butler can do. Checks on the developer's accounts do not verify the recipient's setup. Use the public documentation below as dated research pointers, not as installed-feature tests or hard-coded platform limits.
+This is an agent-only reference. Use [conversation](conversation.md) to report practical effects and supported next steps; never send the recipient this table or ask them to collect tool names, schemas, tokens, or provider IDs. At setup, inspect the recipient's own agent, installed connectors, selected accounts, permissions, and tool schemas. That environment determines what Email Butler can do. Checks on the developer's accounts do not verify the recipient's setup. Use the public documentation below as dated research pointers, not as installed-feature tests or hard-coded platform limits.
 
 ## Outlook checks to perform during setup
 | Capability | Evidence | Shipping posture |

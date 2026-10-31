@@ -21,6 +21,7 @@ REQUIRED_FILES = (
     "assets/default-profile.json", "scripts/butler.py", "scripts/capabilities.py",
     "references/review.md", "references/memory.md", "scripts/journal.py", "scripts/review.py",
     "references/first-run.md",
+    "references/conversation.md",
 )
 
 

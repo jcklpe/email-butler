@@ -11,6 +11,7 @@ import re
 import sys
 import tempfile
 from contextlib import contextmanager
+from datetime import datetime, timezone
 
 
 class ButlerError(ValueError):
@@ -329,27 +330,70 @@ def apply(root, proposal_id, approval):
         return {"status": "applied", "profile": saved, "mailbox_changed": False}
 
 
+def approve_request(root, proposal_id):
+    root = private_directory(root)
+    with locked(root):
+        proposal = read_proposal(root, proposal_id)
+        request = proposal["request"]
+        require(request["type"] in PROPOSAL_ONLY, "Only implementation/access requests use this route")
+        current = profile_at(root)
+        require(digest(current) == proposal["base_digest"] and current["revision"] == request["base_revision"], "Settings changed; prepare a fresh request preview")
+        body = {"id": proposal_id, "request": request, "base_digest": proposal["base_digest"]}
+        path = private_directory(root / "approvals", create=True) / (proposal_id + ".json")
+        if path.exists():
+            receipt = load_json(path)
+            fields(receipt, set(body) | {"approved_at"})
+            require({key: receipt[key] for key in body} == body, "Approved request differs from the reviewed request")
+            status = "already_approved_request"
+        else:
+            receipt = {**body, "approved_at": datetime.now(timezone.utc).isoformat()}
+            atomic_json(path, receipt)
+            require(load_json(path) == receipt, "Request approval could not be verified")
+            status = "request_approved"
+        return {"status": status, "request": request, "profile_changed": False, "implemented": False, "permission_granted": False, "mailbox_changed": False}
+
+
 def confirm(root, reviewed, reply):
     fields(reviewed, {"choices"})
     choices = reviewed["choices"]
     require(type(choices) is list and 1 <= len(choices) <= 20, "Expected the exact choices shown in the current change preview")
     labels, ids = {}, set()
     for choice in choices:
-        fields(choice, {"label", "id"})
+        fields(choice, {"label", "id"}, {"title"})
         require(type(choice["label"]) is str and re.fullmatch(r"B[1-9][0-9]{0,2}", choice["label"]), "Change labels must be short B labels, such as B1")
         require(type(choice["id"]) is str and CHANGE_ID.fullmatch(choice["id"]), "Invalid internal change identity")
         require(choice["label"] not in labels and choice["id"] not in ids, "Duplicate change label or identity")
+        if "title" in choice:
+            text_value(choice["title"], "displayed change title", 120)
         labels[choice["label"]] = choice["id"]
         ids.add(choice["id"])
     require(type(reply) is str, "Expected the direct user's confirmation")
-    normalized = " ".join(reply.strip().casefold().split())
-    if normalized in {"apply this change", "apply it", "yes", "yes, apply it", "go ahead"}:
+    normalized = " ".join(reply.strip().casefold().split()).rstrip(".!").strip()
+    require(normalized not in {"no", "no thanks", "not now", "cancel", "stop"} and not normalized.endswith("?"), "The reply does not confirm a change")
+    if normalized in {"apply this change", "apply it", "yes", "yes, apply it", "go ahead", "yes please", "yes, please", "sure", "do that", "please apply this change"}:
         require(len(labels) == 1, "Several changes were shown; ask which short label the user wants to apply")
         selected = next(iter(labels.values()))
     else:
         match = re.fullmatch(r"(?:apply|approve) (b[1-9][0-9]{0,2})", normalized)
-        require(match is not None and match[1].upper() in labels, "Confirm the current change or select one of its displayed short labels")
-        selected = labels[match[1].upper()]
+        ordinal = re.fullmatch(r"(?:(?:apply|approve|use|choose|go with) )?(?:the )?(first|second|third|fourth|fifth|[1-9]|1[0-9]|20)(?: one| option| change)?", normalized)
+        if match is not None:
+            require(match[1].upper() in labels, "That choice was not in the current preview")
+            selected = labels[match[1].upper()]
+        elif ordinal is not None:
+            word = ordinal[1]
+            numbers = {"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5}
+            number = numbers[word] if word in numbers else int(word)
+            require(number <= len(choices), "That choice was not in the current preview")
+            selected = choices[number - 1]["id"]
+        else:
+            title = re.sub(r"^(?:apply|approve|use|choose|go with) (?:the )?", "", normalized)
+            title = re.sub(r"^the ", "", title)
+            title = re.sub(r" (?:option|change)$", "", title)
+            matches = [choice for choice in choices if "title" in choice and " ".join(choice["title"].strip().casefold().split()) == title]
+            require(len(matches) == 1, "Ask which displayed change the user means")
+            selected = matches[0]["id"]
+    if read_proposal(private_directory(root), selected)["request"]["type"] in PROPOSAL_ONLY:
+        return approve_request(root, selected)
     return apply(root, selected, "apply change " + selected)
 
 

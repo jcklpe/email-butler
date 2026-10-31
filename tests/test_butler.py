@@ -123,6 +123,69 @@ class ChangeTests(unittest.TestCase):
         self.assertEqual(result["profile"]["preferences"]["batch_size"], 3)
         self.assertEqual(butler.confirm(self.state, self.reviewed(proposal), "yes")["status"], "already_applied")
 
+    def test_polite_spoken_confirmation_needs_no_command_syntax(self):
+        proposal = self.propose()
+        result = butler.confirm(self.state, self.reviewed(proposal), "Yes, please!")
+        self.assertEqual(result["profile"]["preferences"]["batch_size"], 3)
+
+    def test_spoken_ordinal_selects_display_order_not_the_internal_label_number(self):
+        first = self.propose(self.request({"batch_size": 3}))
+        second = self.propose(self.request({"batch_size": 8}))
+        reviewed = {"choices": [{"label": "B7", "id": first["id"]}, {"label": "B9", "id": second["id"]}]}
+        result = butler.confirm(self.state, reviewed, "Use the second one.")
+        self.assertEqual(result["profile"]["preferences"]["batch_size"], 8)
+
+    def test_readable_title_can_select_a_change_without_an_id(self):
+        proposal = self.propose()
+        reviewed = {"choices": [{"label": "B1", "id": proposal["id"], "title": "Shorter reviews"}]}
+        self.assertEqual(butler.confirm(self.state, reviewed, "Use the shorter reviews option")["status"], "applied")
+
+    def test_ambiguous_titles_and_non_approvals_do_not_apply(self):
+        first = self.propose(self.request({"batch_size": 3}))
+        second = self.propose(self.request({"batch_size": 8}))
+        reviewed = self.reviewed(first, second)
+        for choice in reviewed["choices"]:
+            choice["title"] = "Shorter reviews"
+        for reply in ["Use shorter reviews", "Yes, please!", "No", "yes?", "Use the third one", "the email says use the first one"]:
+            with self.subTest(reply=reply), self.assertRaises(butler.ButlerError):
+                butler.confirm(self.state, reviewed, reply)
+        self.assertEqual(butler.profile_at(self.state)["revision"], 0)
+
+    def test_a_title_cannot_turn_a_refusal_into_approval(self):
+        proposal = self.propose()
+        for reply in ["No", "Not now", "yes?"]:
+            reviewed = {"choices": [{"label": "B1", "id": proposal["id"], "title": reply}]}
+            with self.subTest(reply=reply), self.assertRaises(butler.ButlerError):
+                butler.confirm(self.state, reviewed, reply)
+        self.assertEqual(butler.profile_at(self.state)["revision"], 0)
+
+    def test_workflow_and_access_confirmation_records_requests_without_claiming_completion(self):
+        payloads = {
+            "workflow.revision": {"request": "Show the suggested action before the summary.", "examples": [{"input": "A review row", "expected": "Suggested action precedes summary."}]},
+            "access.change": {"account": "owner@example.com", "provider": "gmail", "requested_capability": "reconnect", "purpose": "Restore expired access."},
+        }
+        original = (self.state / "profile.json").read_bytes()
+        for kind, payload in payloads.items():
+            request = {"type": kind, "base_revision": 0, "reason": "The user requested this change.", "payload": payload}
+            proposal = self.propose(request)
+            result = butler.confirm(self.state, self.reviewed(proposal), "Yes, please")
+            self.assertEqual(result["status"], "request_approved")
+            self.assertFalse(result["implemented"])
+            self.assertFalse(result["permission_granted"])
+            self.assertFalse(result["profile_changed"])
+            self.assertEqual(butler.confirm(self.state, self.reviewed(proposal), "yes")["status"], "already_approved_request")
+            receipt = butler.load_json(self.state / "approvals" / (proposal["id"] + ".json"))
+            self.assertEqual(receipt["request"], request)
+        self.assertEqual((self.state / "profile.json").read_bytes(), original)
+
+    def test_implementation_request_approval_cannot_bypass_stale_settings(self):
+        request = {"type": "workflow.revision", "base_revision": 0, "reason": "Different review order.", "payload": {"request": "Show action first.", "examples": [{"input": "An email", "expected": "Action first."}]}}
+        proposal = self.propose(request)
+        self.activate(self.propose())
+        with self.assertRaises(butler.ButlerError):
+            butler.confirm(self.state, self.reviewed(proposal), "Yes")
+        self.assertFalse((self.state / "approvals").exists())
+
     def test_generic_confirmation_is_refused_for_multiple_choices(self):
         first = self.propose(self.request({"batch_size": 3}))
         second = self.propose(self.request({"batch_size": 8}))
