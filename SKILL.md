@@ -8,7 +8,7 @@ Help the user make email decisions and establish predictable mailbox organizatio
 ## Start and account coverage
 For installation, a new environment, or a changed connection, read [setup](references/setup.md) and inspect actual tools and connected identities. A tool inventory proves exposure, not permission or a successful operation. Read [capabilities](references/capabilities.md) only for a platform gap or verification question.
 
-Use existing Gmail and Outlook connections. Do not ask for a terminal, code edits, credentials in chat, or a Google Cloud project. Sign-in and permission clicks remain the user's. Do not silently launch another application, widen access, or replace a missing connector with a custom integration.
+Retrieve this skill from its public Git repository. During setup, install or enable the official Gmail and Outlook/Microsoft 365 connectors through the current host's supported controls, reusing correct existing connections. Register the skill for repeat use and verify capabilities in the recipient's actual environment; checks on a developer's account do not establish recipient readiness. Do not ask for a terminal, code edits, credentials in chat, or a Google Cloud project. Sign-in, consent, and host-required approvals remain the user's. Do not silently launch another application, widen access, or replace a missing connector with a custom integration.
 
 At each review, load the current private profile if available and state account coverage and time/folder bounds in one short sentence. Inspect continuation/truncation signals; a search sample is not a complete inbox. Keep missing accounts and unread bodies visible. Do not count two aliases or forwarded addresses as separate verified mailboxes.
 

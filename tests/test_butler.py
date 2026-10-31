@@ -2,13 +2,13 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-import zipfile
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import butler
 import capabilities
-import package_skill
+import install_skill
 
 
 class ChangeTests(unittest.TestCase):
@@ -189,22 +189,58 @@ class CapabilityTests(unittest.TestCase):
         self.assertFalse(report["accounts"][0]["checks"]["filing"]["known_names_present"])
 
 
-class PackagingTests(unittest.TestCase):
-    def test_archive_contains_only_allowlisted_runtime_files(self):
+class InstallationTests(unittest.TestCase):
+    def test_preview_changes_no_files(self):
         with tempfile.TemporaryDirectory() as temporary:
-            output = package_skill.package(ROOT, Path(temporary) / "email-butler.zip")
-            with zipfile.ZipFile(output) as archive:
-                self.assertEqual(set(archive.namelist()), {"email-butler/" + name for name in package_skill.FILES})
-                self.assertNotIn("README.md", "\n".join(archive.namelist()))
-                self.assertNotIn("email-butler/profile.json", archive.namelist())
+            target = Path(temporary).resolve() / "skills"
+            result = install_skill.install(ROOT, "codex", target)
+            self.assertEqual(result["status"], "preview")
+            self.assertFalse(target.exists())
+            self.assertFalse(result["discovery_verified"])
 
-    def test_packager_refuses_runtime_output(self):
-        with self.assertRaises(ValueError):
-            package_skill.package(ROOT, ROOT / "scripts" / "email-butler.zip")
+    def test_registration_is_idempotent_and_keeps_checkout_as_source(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary).resolve() / "skills"
+            result = install_skill.install(ROOT, "codex", target, execute=True)
+            self.assertEqual(result["status"], "registered")
+            self.assertEqual((target / "email-butler").resolve(), ROOT)
+            self.assertEqual(install_skill.install(ROOT, "codex", target, execute=True)["status"], "already_registered")
+            self.assertFalse(result["connectors_changed"])
 
-    def test_packager_cannot_replace_source_documents(self):
-        with self.assertRaises(ValueError):
-            package_skill.package(ROOT, ROOT / "SKILL.md")
+    def test_existing_skill_is_preserved(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary).resolve()
+            target = base / "email-butler"
+            target.mkdir()
+            human_file = target / "SKILL.md"
+            human_file.write_text("User-maintained skill", encoding="utf-8")
+            with self.assertRaises(install_skill.InstallError):
+                install_skill.install(ROOT, "codex", base, execute=True)
+            self.assertEqual(human_file.read_text(), "User-maintained skill")
+
+    def test_dangling_link_is_preserved(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary).resolve()
+            target = base / "email-butler"
+            target.symlink_to(base / "missing", target_is_directory=True)
+            with self.assertRaises(install_skill.InstallError):
+                install_skill.install(ROOT, "claude-code", base, execute=True)
+            self.assertTrue(target.is_symlink())
+            self.assertEqual(target.readlink(), base / "missing")
+
+    def test_missing_runtime_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary).resolve()
+            with self.assertRaises(install_skill.InstallError):
+                install_skill.install(base, "codex", base / "skills", execute=True)
+            self.assertFalse((base / "skills").exists())
+
+    def test_client_defaults_are_isolated(self):
+        with tempfile.TemporaryDirectory() as temporary, patch.object(Path, "home", return_value=Path(temporary).resolve()):
+            codex = install_skill.install(ROOT, "codex")
+            claude = install_skill.install(ROOT, "claude-code")
+            self.assertTrue(codex["destination"].endswith(".agents/skills/email-butler"))
+            self.assertTrue(claude["destination"].endswith(".claude/skills/email-butler"))
 
 
 if __name__ == "__main__":
