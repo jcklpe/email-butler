@@ -3,10 +3,12 @@
 # Email Butler
 An email assistant you use by talking to your agent. It helps you review Gmail and Outlook, file recurring mail automatically where supported, and change how it works after showing you a clear preview.
 
-This is an initial prototype. Copy the prompt below into your agent; it will handle installation and set up your Gmail and Outlook connections.
+This is an initial prototype. Your agent handles installation, checks your Gmail and Outlook connections, and guides you through any sign-in or permission clicks.
 
 <h2><img src="assets/agent-hands-head-thumbs-up.png" height="32" alt="Robot head giving a thumbs-up"> Start here with your agent</h2>
-Copy this prompt into your agent on the computer where you want to use Email Butler:
+For first setup, use an agent that can work with files on your computer, such as Codex desktop or Claude Code in the Claude desktop app. Copy the prompt below into that agent. You do not need to use a terminal or edit files.
+
+An ordinary web chat without access to your computer cannot install this local package. Settings saved here are not automatically shared with web chats.
 
 > Set up Email Butler from the public repository https://github.com/jcklpe/email-butler on this computer. Retrieve the repository, read AGENTS.md, SKILL.md, and references/setup.md, and handle the installation. Install or enable the official Gmail and Outlook/Microsoft 365 connectors for this agent, reusing any correct existing connections. Guide me through sign-in or permission clicks that require me. Check the actual accounts and capabilities available here, create private settings without overwriting existing ones, and show me a small email review using the defaults. Ask customization questions after I have something useful to react to. Keep private settings and mail out of Git. Do not ask me to use a terminal or edit code. If an actual restriction prevents a step, explain that specific restriction and what I need to do next.
 
