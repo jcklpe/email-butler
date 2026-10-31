@@ -52,7 +52,7 @@ class HistoryTests(PrivateStateCase):
         history = butler.change_history(self.state)
         self.assertEqual(len(history["changes"]), 1)
         entry = history["changes"][0]
-        self.assertEqual(entry["before"]["preferences"]["batch_size"], 5)
+        self.assertEqual(entry["before"]["preferences"]["batch_size"], 15)
         self.assertEqual(entry["after"]["preferences"]["batch_size"], 3)
         self.assertEqual(entry["id"], pending["id"])
 
@@ -67,7 +67,7 @@ class HistoryTests(PrivateStateCase):
         self.assertEqual(history["revision"], 3)
         self.assertEqual(history["older_changes"], 2)
         self.assertEqual(history["changes"][0]["type"], "configuration.restore")
-        self.assertEqual(history["changes"][0]["after"]["preferences"]["batch_size"], 5)
+        self.assertEqual(history["changes"][0]["after"]["preferences"]["batch_size"], 15)
 
     def test_tampered_revision_is_not_reported_as_valid_history(self):
         pending = self.preference(3)
@@ -80,6 +80,14 @@ class HistoryTests(PrivateStateCase):
 
 
 class JournalTests(PrivateStateCase):
+    def test_useful_mail_can_prompt_filing_without_an_unsubscribe_suggestion(self):
+        for number in range(3):
+            journal.record(self.state, self.action("message-" + str(number)))
+        journal.record(self.state, self.feedback("useful"))
+        report = journal.summarize(self.state)["streams"][0]
+        self.assertEqual(report["suggestions"], ["review_narrow_native_rule"])
+        self.assertEqual(butler.profile_at(self.state)["revision"], 0)
+
     def action(self, message="message-1", status="verified", **extra):
         value = {"kind": "action", "account": "owner@example.com", "provider": "outlook", "message_id": message, "sender": "events@example.net", "pattern": "weekly-events", "operation_id": "archive-" + message, "action": "archive", "status": status}
         value.update(extra)
@@ -128,7 +136,7 @@ class JournalTests(PrivateStateCase):
         self.assertFalse(report["policy_changed"])
         self.assertEqual(before, (self.state / "profile.json").read_bytes())
 
-    def test_useful_or_unsure_feedback_keeps_automatic_candidates_pending(self):
+    def test_unsure_feedback_keeps_automatic_candidates_pending(self):
         for number in range(3):
             journal.record(self.state, self.action("message-" + str(number)))
         journal.record(self.state, self.feedback("unsure"))
@@ -161,6 +169,40 @@ class JournalTests(PrivateStateCase):
 
 
 class ReviewTests(PrivateStateCase):
+    def test_existing_batch_preference_is_not_overwritten_by_new_defaults(self):
+        value = butler.profile_at(self.state)
+        value["preferences"]["batch_size"] = 5
+        butler.atomic_json(self.state / "profile.json", value)
+        result = butler.initialize(self.state)
+        self.assertEqual(result["profile"]["preferences"]["batch_size"], 5)
+        self.assertEqual(len(review.open_queue(self.state, self.source())["rows"]), 5)
+
+    def test_markers_and_unsubscribe_metadata_survive_queue_resume_without_filtering(self):
+        source = self.source(20)
+        source["items"][0].update({"read_state": "unread", "starred": True, "flagged": True, "unsubscribe": {"status": "available", "url": "https://example.net/preferences?id=synthetic", "kind": "preferences", "description": "Email-preferences page; digest scope is unconfirmed."}})
+        source["items"][1].update({"read_state": "unknown", "starred": None, "flagged": None, "unsubscribe": {"status": "unavailable"}})
+        slate = review.open_queue(self.state, source)
+        self.assertEqual(len(slate["rows"]), 15)
+        self.assertEqual(slate["rows"][0]["id"], source["items"][0]["id"])
+        resumed = review.peek(self.state, slate["id"])
+        for key in ["read_state", "starred", "flagged", "unsubscribe"]:
+            self.assertEqual(resumed["rows"][0][key], source["items"][0][key])
+        self.assertIsNone(resumed["rows"][1]["flagged"])
+
+    def test_invalid_marker_and_unsubscribe_payloads_cannot_enter_a_queue(self):
+        updates = [
+            {"flagged": "yes"},
+            {"read_state": "body_read"},
+            {"unsubscribe": {"status": "available", "url": "javascript:alert(1)", "kind": "body_unsubscribe", "description": "A link"}},
+            {"unsubscribe": {"status": "available", "url": "https://example.net/unsubscribe", "kind": "body_unsubscribe"}},
+            {"unsubscribe": {"status": "unsafe", "url": "https://example.net/unsubscribe"}},
+        ]
+        for update in updates:
+            source = self.source(1)
+            source["items"][0].update(update)
+            with self.subTest(update=update), self.assertRaises(butler.ButlerError):
+                review.open_queue(self.state, source)
+
     def test_one_off_size_does_not_change_saved_settings(self):
         before = (self.state / "profile.json").read_bytes()
         slate = review.open_queue(self.state, self.source(6), batch_size=3)
@@ -179,7 +221,7 @@ class ReviewTests(PrivateStateCase):
         result = review.deferred(self.state, slate["id"])
         self.assertEqual([(row["row"], row["id"]) for row in result["rows"]], [("R2", "message-1")])
 
-    def source(self, count=12):
+    def source(self, count=32):
         return {"scope": [{"account": "owner@example.com", "provider": "gmail", "folder": "inbox", "after": "2026-10-24T00:00:00Z", "before": "2026-11-01T00:00:00Z", "complete": False}], "items": [{"account": "owner@example.com", "provider": "gmail", "id": "message-" + str(number), "sender": "events@example.net", "subject": "Weekly event notice " + str(number), "received_at": "2026-10-31T12:00:00Z", "body_read": False} for number in range(count)]}
 
     def decisions(self, slate):
@@ -188,15 +230,15 @@ class ReviewTests(PrivateStateCase):
     def test_only_one_slate_and_resume_keeps_stable_labels(self):
         source = self.source()
         slate = review.open_queue(self.state, source)
-        self.assertEqual([row["row"] for row in slate["rows"]], ["R1", "R2", "R3", "R4", "R5"])
-        self.assertEqual(slate["selected"], 12)
+        self.assertEqual([row["row"] for row in slate["rows"]], ["R" + str(number) for number in range(1, 16)])
+        self.assertEqual(slate["selected"], 32)
         self.assertFalse(slate["scope"][0]["complete"])
         result = review.finish(self.state, slate["id"], self.decisions(slate))
         self.assertEqual(result["status"], "paused")
         self.assertNotIn("rows", result)
         resumed = review.open_queue(self.state, source)
-        self.assertEqual(resumed["rows"][0]["row"], "R6")
-        self.assertEqual(resumed["reviewed"], 5)
+        self.assertEqual(resumed["rows"][0]["row"], "R16")
+        self.assertEqual(resumed["reviewed"], 15)
 
     def test_current_slate_must_be_resolved_and_stale_decisions_cannot_skip_next_slate(self):
         slate = review.open_queue(self.state, self.source())
@@ -208,7 +250,7 @@ class ReviewTests(PrivateStateCase):
         review.finish(self.state, slate["id"], request)
         with self.assertRaises(butler.ButlerError):
             review.finish(self.state, slate["id"], request)
-        self.assertEqual(review.peek(self.state, slate["id"])["reviewed"], 5)
+        self.assertEqual(review.peek(self.state, slate["id"])["reviewed"], 15)
 
     def test_uncertain_and_duplicate_decisions_cannot_advance(self):
         slate = review.open_queue(self.state, self.source())
@@ -246,7 +288,7 @@ class ReviewTests(PrivateStateCase):
         review.finish(self.state, slate["id"], self.decisions(slate))
         raw = subprocess.check_output([sys.executable, "-B", str(ROOT / "scripts/review.py"), "peek", "--state-dir", str(self.state), "--id", slate["id"]], text=True)
         resumed = json.loads(raw)
-        self.assertEqual(resumed["rows"][0]["id"], "message-5")
+        self.assertEqual(resumed["rows"][0]["id"], "message-15")
         self.assertFalse(resumed["mailbox_changed"])
 
 

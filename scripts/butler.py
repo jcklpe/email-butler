@@ -77,16 +77,22 @@ def account_provider(value):
 
 
 def organization(value):
-    fields(value, {"account", "provider", "labels"})
+    fields(value, {"account", "provider"}, {"labels", "folders"})
     account_provider(value)
-    require(type(value["labels"]) is list and 1 <= len(value["labels"]) <= 20, "labels must contain 1–20 entries")
-    names = []
-    for label in value["labels"]:
-        fields(label, {"name", "purpose"})
-        text_value(label["name"], "label name", 100)
-        text_value(label["purpose"], "label purpose", 500)
-        names.append(label["name"].casefold())
-    require(len(set(names)) == len(names), "Duplicate label names")
+    total = 0
+    for key in ("labels", "folders"):
+        entries = value.get(key, [])
+        require(type(entries) is list and len(entries) <= 20, f"{key} must be a list of at most 20 entries")
+        require(key != "folders" or not entries or value["provider"] == "outlook", "Use labels for Gmail organization; folders are Outlook plans")
+        names = []
+        for entry in entries:
+            fields(entry, {"name", "purpose"})
+            text_value(entry["name"], key + " name", 100)
+            text_value(entry["purpose"], key + " purpose", 500)
+            names.append(entry["name"].casefold())
+        require(len(set(names)) == len(names), "Duplicate " + key + " names")
+        total += len(entries)
+    require(1 <= total <= 20, "An organization plan needs 1–20 labels/folders in total")
 
 
 def rule(value):
@@ -99,10 +105,18 @@ def rule(value):
         email(value["match"]["recipient"], "recipient")
     if "subject_contains" in value["match"]:
         text_value(value["match"]["subject_contains"], "subject condition", 200)
-    fields(value["action"], {"label", "archive"})
-    text_value(value["action"]["label"], "rule label", 100)
+    fields(value["action"], {"archive"}, {"label", "folder"})
+    require("label" in value["action"] or "folder" in value["action"], "Rule action needs a label or folder")
+    if "label" in value["action"]:
+        text_value(value["action"]["label"], "rule label", 100)
+        require(value["action"]["label"].strip().casefold() not in {"trash", "spam"}, "Rule labels cannot target Trash or Spam")
+    if "folder" in value["action"]:
+        text_value(value["action"]["folder"], "rule folder", 100)
+        require(value["provider"] == "outlook", "Gmail filing uses label plus archive, not folder moves")
+        require(value["action"]["folder"].strip().casefold() not in {"trash", "deleted items", "deleteditems", "junk", "junk email", "junkemail", "spam"}, "Filing rules cannot target known Trash/Junk destinations")
+        require(value["action"]["archive"] is False, "A specific folder and Archive are conflicting destinations")
     require(type(value["action"]["archive"]) is bool, "archive must be a boolean")
-    require(not value["action"]["archive"] or "subject_contains" in value["match"], "Archiving requires a sender and a subject condition")
+    require(not (value["action"]["archive"] or "folder" in value["action"]) or "subject_contains" in value["match"], "Out-of-Inbox filing requires a sender and a subject condition")
 
 
 def validate_profile(value):

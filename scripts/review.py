@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import re
 import sys
+from urllib.parse import urlsplit
 
 import butler as b
 
@@ -20,6 +21,24 @@ def timestamp(value):
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     b.require(parsed.tzinfo is not None, "Timestamps need a timezone")
     return parsed
+
+
+def unsubscribe(value):
+    b.require(type(value) is dict, "Expected unsubscribe metadata")
+    if value.get("status") == "available":
+        b.fields(value, {"status", "url", "kind", "description"})
+        b.text_value(value["url"], "sender-provided unsubscribe link", 2000)
+        b.text_value(value["description"], "link type and relevance", 400)
+        b.require(value["kind"] in {"list_unsubscribe", "preferences", "body_unsubscribe", "mailto"}, "Unknown unsubscribe link kind")
+        parsed = urlsplit(value["url"])
+        if value["kind"] == "mailto":
+            b.require(parsed.scheme == "mailto", "A mailto option needs a mailto link")
+            b.email(parsed.path, "unsubscribe recipient")
+        else:
+            b.require(parsed.scheme in {"https", "http"} and bool(parsed.hostname) and parsed.username is None and parsed.password is None, "Expected a sender-provided web link")
+    else:
+        b.fields(value, {"status"})
+        b.require(value["status"] in {"not_found", "unavailable", "not_applicable", "unsafe"}, "Unknown unsubscribe status")
 
 
 def validate_input(value):
@@ -38,7 +57,7 @@ def validate_input(value):
     b.require(type(value["items"]) is list and len(value["items"]) <= 200, "A queue holds at most 200 selected messages; use bounded provider searches for a larger backlog")
     seen = set()
     for item in value["items"]:
-        b.fields(item, {"account", "provider", "id", "sender", "subject", "received_at", "body_read"}, {"link"})
+        b.fields(item, {"account", "provider", "id", "sender", "subject", "received_at", "body_read"}, {"link", "read_state", "starred", "flagged", "unsubscribe"})
         b.account_provider(item)
         b.require((item["provider"], item["account"].casefold()) in accounts, "Message account is outside this queue")
         b.text_value(item["id"], "message identity", 1000)
@@ -51,6 +70,13 @@ def validate_input(value):
         if "link" in item:
             b.text_value(item["link"], "provider source link", 2000)
             b.require(item["link"].startswith("https://"), "Only provider-returned HTTPS source links belong here")
+        if "read_state" in item:
+            b.require(item["read_state"] in {"read", "unread", "unknown"}, "Unknown read state")
+        for marker in ("starred", "flagged"):
+            if marker in item:
+                b.require(type(item[marker]) is bool or item[marker] is None, "Star/flag state must be boolean or unknown (null)")
+        if "unsubscribe" in item:
+            unsubscribe(item["unsubscribe"])
         key = (item["provider"], item["account"].casefold(), item["id"])
         b.require(key not in seen, "Duplicate message identity")
         seen.add(key)

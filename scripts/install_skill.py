@@ -20,6 +20,7 @@ REQUIRED_FILES = (
     "references/organization.md", "references/capabilities.md",
     "assets/default-profile.json", "scripts/butler.py", "scripts/capabilities.py",
     "references/review.md", "references/memory.md", "scripts/journal.py", "scripts/review.py",
+    "references/first-run.md",
 )
 
 

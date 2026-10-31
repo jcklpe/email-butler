@@ -111,8 +111,8 @@ def summarize(root):
                             unresolved[operation] = event
             tallies = {name: len(counts[name]) for name in sorted(ACTIONS | {"unwanted", "useful", "unsure"})}
             ideas = []
-            if not tallies["useful"] and not tallies["unsure"] and not tallies["unsubscribe"]:
-                if tallies["unwanted"] >= 3 or tallies["archive"] >= 3:
+            if not tallies["unsure"] and not tallies["unsubscribe"]:
+                if not tallies["useful"] and (tallies["unwanted"] >= 3 or tallies["archive"] >= 3):
                     ideas.append("ask_keep_receiving_or_unsubscribe")
                 if max(tallies["archive"], tallies["label"], tallies["move"]) >= 3:
                     ideas.append("review_narrow_native_rule")

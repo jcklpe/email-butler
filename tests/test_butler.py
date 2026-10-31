@@ -12,6 +12,59 @@ import install_skill
 
 
 class ChangeTests(unittest.TestCase):
+    def test_outlook_folder_organization_saves_a_plan_without_mailbox_changes(self):
+        request = {"type": "organization.plan", "base_revision": 0, "reason": "File reviewed work and reference mail.", "payload": {"account": "owner@example.com", "provider": "outlook", "folders": [{"name": "Action", "purpose": "Reviewed current work."}, {"name": "Reference", "purpose": "Material retained for lookup."}]}}
+        proposal = self.propose(request)
+        result = self.activate(proposal)
+        saved = result["profile"]["organization_plans"]["owner@example.com"]
+        self.assertEqual(saved["folders"], request["payload"]["folders"])
+        self.assertNotIn("labels", saved)
+        self.assertFalse(result["mailbox_changed"])
+
+    def test_folder_and_label_scheme_validation_preserves_provider_boundaries(self):
+        base = {"account": "owner@example.com", "provider": "outlook"}
+        invalid = [base, {**base, "folders": []}, {**base, "folders": [{"name": "Action", "purpose": "Work"}] * 2}, {**base, "provider": "gmail", "folders": [{"name": "Action", "purpose": "Work"}]}, {**base, "folders": [{"name": "Action", "purpose": "Work", "delete": True}]}]
+        for payload in invalid:
+            with self.subTest(payload=payload), self.assertRaises(butler.ButlerError):
+                butler.organization(payload)
+        self.assertIsNone(butler.organization({**base, "labels": [{"name": "Budget", "purpose": "Topic"}], "folders": [{"name": "Action", "purpose": "Work"}]}))
+
+    def test_narrow_outlook_folder_rule_is_a_plan_and_can_also_add_a_category(self):
+        request = self.rule_request()
+        request["payload"]["provider"] = "outlook"
+        request["payload"]["action"] = {"folder": "Reference", "label": "Service notices", "archive": False}
+        result = self.activate(self.propose(request))
+        plan = result["profile"]["rule_plans"]["owner@example.com:monthly-notices"]
+        self.assertEqual(plan["action"]["folder"], "Reference")
+        self.assertFalse(result["mailbox_changed"])
+
+    def test_folder_rule_refuses_broad_conflicting_or_wrong_provider_actions(self):
+        for change in ["broad", "conflicting", "gmail"]:
+            request = self.rule_request()
+            request["payload"]["provider"] = "outlook"
+            request["payload"]["action"] = {"folder": "Reference", "archive": False}
+            if change == "broad":
+                del request["payload"]["match"]["subject_contains"]
+            elif change == "conflicting":
+                request["payload"]["action"]["archive"] = True
+            else:
+                request["payload"]["provider"] = "gmail"
+            with self.subTest(change=change), self.assertRaises(butler.ButlerError):
+                self.propose(request)
+
+    def test_filing_plan_cannot_disguise_known_trash_or_junk_actions(self):
+        for folder in ["Trash", "Deleted Items", "Junk Email", "Spam"]:
+            request = self.rule_request()
+            request["payload"]["provider"] = "outlook"
+            request["payload"]["action"] = {"folder": folder, "archive": False}
+            with self.subTest(folder=folder), self.assertRaises(butler.ButlerError):
+                self.propose(request)
+        for label in ["TRASH", "SPAM"]:
+            request = self.rule_request()
+            request["payload"]["action"]["label"] = label
+            with self.subTest(label=label), self.assertRaises(butler.ButlerError):
+                self.propose(request)
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
@@ -34,7 +87,7 @@ class ChangeTests(unittest.TestCase):
 
     def test_proposal_does_not_activate(self):
         proposal = self.propose()
-        self.assertEqual(butler.profile_at(self.state)["preferences"]["batch_size"], 5)
+        self.assertEqual(butler.profile_at(self.state)["preferences"]["batch_size"], 15)
         self.assertEqual(proposal["proposed"]["preferences"]["batch_size"], 3)
         self.assertFalse(proposal["mailbox_changed"])
 
@@ -100,7 +153,7 @@ class ChangeTests(unittest.TestCase):
         self.activate(self.propose())
         request = {"type": "configuration.restore", "base_revision": 1, "reason": "Return to the earlier settings.", "payload": {"revision": 0}}
         result = self.activate(self.propose(request))
-        self.assertEqual(result["profile"]["preferences"]["batch_size"], 5)
+        self.assertEqual(result["profile"]["preferences"]["batch_size"], 15)
         self.assertEqual(result["profile"]["revision"], 2)
         self.assertFalse(result["mailbox_changed"])
 
